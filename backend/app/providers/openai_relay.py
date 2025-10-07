@@ -11,10 +11,11 @@ logger = logging.getLogger("openai_relay")
 OPENAI_WS_URL = settings.OPENAI_API_HOST.replace("https://","wss://") + f"/v1/realtime?model={settings.OPENAI_MODEL}"
 
 class OpenAIProviderSession:
-    def __init__(self, session_id: str, on_event, language: str = "English"):
+    def __init__(self, session_id: str, on_event, language: str = "English", voice: str = "alloy"):
         self.session_id = session_id
         self.on_event = on_event
         self.language = language or "English"
+        self.voice = voice or "nova" 
         self._session = None
         self._ws = None
         self._reader_task = None
@@ -30,7 +31,8 @@ class OpenAIProviderSession:
             "session": {
                 "type": "realtime",
                 "output_modalities": ["audio"],
-                "instructions": f"You are a helpful voice assistant. Always respond and speak in {self.language}."
+                "voice": self.voice,
+                "instructions": f"You are a helpful voice assistant. You MUST respond ONLY in {self.language}. Never use any other language. If the user speaks in another language, acknowledge it but continue responding in {self.language}."
             }
         }
         await self._ws.send_str(json.dumps(init_msg))
@@ -58,6 +60,8 @@ class OpenAIProviderSession:
         response_obj = {}
         if text:
             response_obj["instructions"] = text
+        else:
+            response_obj["instructions"] = f"Respond in {self.language} only."
         msg = {"type": "response.create", "response": response_obj}
         await self._ws.send_str(json.dumps(msg))
 
@@ -76,7 +80,17 @@ class OpenAIProviderSession:
         msg = {
             "type": "session.update",
             "session": {
-                "instructions": f"You are a helpful voice assistant. Always respond and speak in {self.language}."
+                "instructions": f"You are a helpful voice assistant. You MUST respond ONLY in {self.language}. Never use any other language. If the user speaks in another language, acknowledge it but continue responding in {self.language}."
+            }
+        }
+        await self._ws.send_str(json.dumps(msg))
+
+    async def update_voice(self, voice: str):
+        self.voice = voice or self.voice or "alloy"
+        msg = {
+            "type": "session.update",
+            "session": {
+                "voice": self.voice
             }
         }
         await self._ws.send_str(json.dumps(msg))

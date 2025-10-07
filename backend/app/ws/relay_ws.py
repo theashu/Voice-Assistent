@@ -83,7 +83,8 @@ async def relay_ws(websocket: WebSocket):
                 if t == "init":
                     client_id = obj.get("sessionId") or f"c_{int(time.time()*1000)}"
                     chosen_language = obj.get("language", "English")
-                    provider = OpenAIProviderSession(client_id, handle_provider_event, language=chosen_language)
+                    chosen_voice = obj.get("voice", "onyx")
+                    provider = OpenAIProviderSession(client_id, handle_provider_event, language=chosen_language, voice=chosen_voice)
                     await provider.connect()
                     SESSIONS[client_id] = provider
                     if not idle_commit_task:
@@ -125,6 +126,16 @@ async def relay_ws(websocket: WebSocket):
                         await websocket.send_text(json.dumps({
                             "type": "language.updated",
                             "language": new_lang
+                        }))
+
+                elif t == "voice.update":
+                    # Update the assistant's voice mid-session
+                    new_voice = obj.get("voice") or "alloy"
+                    if provider:
+                        await provider.update_voice(new_voice)
+                        await websocket.send_text(json.dumps({
+                            "type": "voice.updated",
+                            "voice": new_voice
                         }))
 
             elif data.get("bytes"):

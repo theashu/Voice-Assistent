@@ -78,7 +78,6 @@ export default function App() {
           console.log("Text:", ev.data);
         }
       } else {
-        // binary audio bytes from server (TTS)
         audioQueueRef.current.push(ev.data);
         setIsThinking(true);
         if (!isPlayingAudioRef.current) {
@@ -162,7 +161,6 @@ export default function App() {
 
       setIsThinking(false);
     } else if (obj.type === "input_audio_buffer.committed") {
-      // This is a workaround to display the user's input since the API is not providing a direct transcript event for it.
       setMessages((m) => {
         const lastMessage = m[m.length - 1];
         if (lastMessage && lastMessage.role === "user") {
@@ -254,7 +252,6 @@ export default function App() {
       if (now - vadLastAboveAt > VAD_SUSTAIN_MS) {
         if (isPlayingAudioRef.current) {
           console.log("VAD barge-in: stopping playback and interrupting");
-          // Immediately stop current playback and clear pending audio for instant barge-in
           stopPlayback();
           sendJson({ type: "interruption" });
           vadLastAboveAt = 0;
