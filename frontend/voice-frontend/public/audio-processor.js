@@ -1,18 +1,36 @@
 class AudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.inputSampleRate = 44100;
-    this.outputSampleRate = 24000;
+    this.inputSampleRate = 48000; // Most modern browsers use 48kHz
+    this.outputSampleRate = 24000; // OpenAI expects 24kHz
     this.resampleRatio = this.inputSampleRate / this.outputSampleRate;
+    this.bufferSize = 1024; // Process in chunks
+    this.inputBuffer = [];
   }
 
   process(inputs, outputs, parameters) {
     const input = inputs[0];
     if (input.length > 0) {
       const monoChannel = input[0];
-      const resampled = this.resample(monoChannel, this.resampleRatio);
-      const pcm16 = this.float32To16BitPCM(resampled);
-      this.port.postMessage(pcm16.buffer);
+      
+      // Accumulate samples in buffer for better processing
+      for (let i = 0; i < monoChannel.length; i++) {
+        this.inputBuffer.push(monoChannel[i]);
+      }
+      
+      // Process when we have enough samples
+      if (this.inputBuffer.length >= this.bufferSize) {
+        const bufferArray = new Float32Array(this.inputBuffer.slice(0, this.bufferSize));
+        this.inputBuffer = this.inputBuffer.slice(this.bufferSize);
+        
+        const resampled = this.resample(bufferArray, this.resampleRatio);
+        const pcm16 = this.float32To16BitPCM(resampled);
+        
+        // Only send if we have meaningful audio (not silence)
+        if (this.hasAudioContent(resampled)) {
+          this.port.postMessage(pcm16.buffer);
+        }
+      }
     }
     return true;
   }
@@ -38,6 +56,16 @@ class AudioProcessor extends AudioWorkletProcessor {
       output[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     return output;
+  }
+
+  hasAudioContent(buffer) {
+    // Check if buffer contains meaningful audio (not just silence)
+    let sum = 0;
+    for (let i = 0; i < buffer.length; i++) {
+      sum += Math.abs(buffer[i]);
+    }
+    const average = sum / buffer.length;
+    return average > 0.001; // Threshold for meaningful audio
   }
 }
 

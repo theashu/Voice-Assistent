@@ -46,8 +46,12 @@ async def relay_ws(websocket: WebSocket):
                             try:
                                 await provider.commit()
                                 await provider.response_create()
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                # Handle buffer too small errors gracefully
+                                if "buffer too small" in str(e).lower() or "empty" in str(e).lower():
+                                    logger.debug("Audio buffer too small for commit, skipping")
+                                else:
+                                    logger.error(f"Error during commit: {e}")
                             finally:
                                 last_audio_at = 0.0
                     elif t == "response.error" or t == "error":
@@ -59,18 +63,40 @@ async def relay_ws(websocket: WebSocket):
             await websocket.send_text(json.dumps(payload))
     async def idle_commit_loop():
         nonlocal last_audio_at, provider, is_generating
-        IDLE_MS = 300
+        IDLE_MS = 400 
+        last_language_reinforcement = 0.0
+        LANGUAGE_REINFORCEMENT_INTERVAL = 30000 
+        min_buffer_time = 200
+        
         while True:
             await asyncio.sleep(0.1)
             if not provider:
                 continue
-            # Only auto-commit when we're not currently generating output
-            if not is_generating and last_audio_at and (time.time() * 1000 - last_audio_at) > IDLE_MS:
+            
+            current_time = time.time() * 1000
+            
+            # Periodic language reinforcement to prevent drift
+            if current_time - last_language_reinforcement > LANGUAGE_REINFORCEMENT_INTERVAL:
+                try:
+                    # Send a silent language reinforcement
+                    await provider.update_language(provider.language)
+                    last_language_reinforcement = current_time
+                except Exception:
+                    pass
+            
+            # Only auto-commit when we're not currently generating output and enough time has passed
+            if (not is_generating and last_audio_at and 
+                (current_time - last_audio_at) > IDLE_MS and
+                (current_time - last_audio_at) > min_buffer_time):
                 try:
                     await provider.commit()
                     await provider.response_create()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Handle buffer too small errors gracefully
+                    if "buffer too small" in str(e).lower() or "empty" in str(e).lower():
+                        logger.debug("Audio buffer too small for auto-commit, skipping")
+                    else:
+                        logger.error(f"Error during auto-commit: {e}")
                 finally:
                     last_audio_at = 0.0
 
@@ -83,7 +109,9 @@ async def relay_ws(websocket: WebSocket):
                 if t == "init":
                     client_id = obj.get("sessionId") or f"c_{int(time.time()*1000)}"
                     chosen_language = obj.get("language", "English")
-                    chosen_voice = obj.get("voice", "onyx")
+                    if not chosen_language or chosen_language.strip() == "":
+                        chosen_language = "English"
+                    chosen_voice = obj.get("voice", "alloy")
                     provider = OpenAIProviderSession(client_id, handle_provider_event, language=chosen_language, voice=chosen_voice)
                     await provider.connect()
                     SESSIONS[client_id] = provider
@@ -99,7 +127,18 @@ async def relay_ws(websocket: WebSocket):
                     await provider.response_create(obj.get("text", ""))
 
                 elif t == "interruption":
-                    await provider.cancel()
+                    # Only cancel if there's an active response
+                    if provider and is_generating:
+                        try:
+                            await provider.cancel()
+                            # Clear conversation context after interruption
+                            await provider.clear_context()
+                        except Exception as e:
+                            # Handle "no active response" errors gracefully
+                            if "not active" in str(e).lower() or "no active" in str(e).lower():
+                                logger.debug("No active response to cancel")
+                            else:
+                                logger.error(f"Error during cancel: {e}")
                     # Ensure state resets so next speech can be processed immediately
                     is_generating = False
                     cancel_sent_for_current = True
@@ -107,9 +146,16 @@ async def relay_ws(websocket: WebSocket):
                 elif t == "input_audio_buffer.commit":
                     # Client indicates end of current utterance; forward commit to provider
                     if provider:
-                        await provider.commit()
-                        # After committing, request a response based on latest input
-                        await provider.response_create()
+                        try:
+                            await provider.commit()
+                            # After committing, request a response based on latest input
+                            await provider.response_create()
+                        except Exception as e:
+                            # Handle buffer too small errors gracefully
+                            if "buffer too small" in str(e).lower() or "empty" in str(e).lower():
+                                logger.debug("Audio buffer too small for manual commit, skipping")
+                            else:
+                                logger.error(f"Error during manual commit: {e}")
 
                 elif t == "greeting":
                     # Optionally send an initial spoken greeting from the assistant
@@ -121,12 +167,24 @@ async def relay_ws(websocket: WebSocket):
                 elif t == "language.update":
                     # Update the assistant's response language mid-session
                     new_lang = obj.get("language") or "English"
+                    # Validate language input to prevent unknown language issues
+                    if not new_lang or new_lang.strip() == "":
+                        new_lang = "English"
+                    
                     if provider:
                         await provider.update_language(new_lang)
                         await websocket.send_text(json.dumps({
                             "type": "language.updated",
                             "language": new_lang
                         }))
+                        # Send a strong language enforcement message
+                        if new_lang.lower().startswith("eng") or new_lang.lower() == "english":
+                            greet_text = "Language switched to English. I will now respond ONLY in English. How can I help you?"
+                        elif new_lang.lower().startswith("hin") or new_lang.lower() == "hindi":
+                            greet_text = "भाषा अंग्रेजी से हिंदी में बदली गई है। अब मैं केवल हिंदी में जवाब दूंगी। मैं आपकी कैसे सहायता कर सकती हूं?"
+                        else:
+                            greet_text = f"Language switched to {new_lang}. I will respond only in {new_lang}. How can I help you?"
+                        await provider.response_create(greet_text)
 
                 elif t == "voice.update":
                     # Update the assistant's voice mid-session
@@ -144,9 +202,20 @@ async def relay_ws(websocket: WebSocket):
                     if is_generating and not cancel_sent_for_current:
                         try:
                             await provider.cancel()
-                        except Exception:
-                            pass
+                            # Clear context when user interrupts with new audio
+                            await provider.clear_context()
+                            logger.debug("Cancelled active response for barge-in and cleared context")
+                        except Exception as e:
+                            # Handle "no active response" errors gracefully
+                            if "not active" in str(e).lower() or "no active" in str(e).lower():
+                                logger.debug("No active response to cancel during barge-in")
+                            else:
+                                logger.error(f"Error during barge-in cancel: {e}")
                         cancel_sent_for_current = True
+                    
+                    # Send audio chunk and update timestamp
+                    audio_size = len(data["bytes"])
+                    logger.debug(f"Received audio chunk: {audio_size} bytes")
                     await provider.send_audio_chunk(data["bytes"])
                     last_audio_at = time.time() * 1000
 

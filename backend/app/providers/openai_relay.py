@@ -31,8 +31,7 @@ class OpenAIProviderSession:
             "session": {
                 "type": "realtime",
                 "output_modalities": ["audio"],
-                "voice": self.voice,
-                "instructions": f"You are a helpful voice assistant. You MUST respond ONLY in {self.language}. Never use any other language. If the user speaks in another language, acknowledge it but continue responding in {self.language}."
+                "instructions": f"CRITICAL: You are a voice assistant that MUST respond ONLY in {self.language}. This is a hard requirement that cannot be violated. Never respond in any other language, even if the user speaks in a different language. If the user speaks in another language, acknowledge it briefly but immediately continue responding in {self.language}. Your primary language is {self.language} and you must maintain this consistently throughout the entire conversation. Use voice: {self.voice} for all responses."
             }
         }
         await self._ws.send_str(json.dumps(init_msg))
@@ -59,9 +58,9 @@ class OpenAIProviderSession:
         # If text is provided, send as instructions; otherwise trigger generation from latest input buffer
         response_obj = {}
         if text:
-            response_obj["instructions"] = text
+            response_obj["instructions"] = f"{text} Remember: You MUST respond ONLY in {self.language}. Never use any other language. Focus only on what the user is asking about now, not previous topics."
         else:
-            response_obj["instructions"] = f"Respond in {self.language} only."
+            response_obj["instructions"] = f"Respond to the user's current input in {self.language} only. This is a critical requirement - never respond in any other language. Focus on the current topic the user is asking about, not previous conversation topics."
         msg = {"type": "response.create", "response": response_obj}
         await self._ws.send_str(json.dumps(msg))
 
@@ -80,7 +79,8 @@ class OpenAIProviderSession:
         msg = {
             "type": "session.update",
             "session": {
-                "instructions": f"You are a helpful voice assistant. You MUST respond ONLY in {self.language}. Never use any other language. If the user speaks in another language, acknowledge it but continue responding in {self.language}."
+                "type": "realtime",
+                "instructions": f"CRITICAL: You are a voice assistant that MUST respond ONLY in {self.language}. This is a hard requirement that cannot be violated. Never respond in any other language, even if the user speaks in a different language. If the user speaks in another language, acknowledge it briefly but immediately continue responding in {self.language}. Your primary language is {self.language} and you must maintain this consistently throughout the entire conversation. Use voice: {self.voice} for all responses."
             }
         }
         await self._ws.send_str(json.dumps(msg))
@@ -90,8 +90,37 @@ class OpenAIProviderSession:
         msg = {
             "type": "session.update",
             "session": {
-                "voice": self.voice
+                "type": "realtime",
+                "instructions": f"CRITICAL: You are a voice assistant that MUST respond ONLY in {self.language}. This is a hard requirement that cannot be violated. Never respond in any other language, even if the user speaks in a different language. If the user speaks in another language, acknowledge it briefly but immediately continue responding in {self.language}. Your primary language is {self.language} and you must maintain this consistently throughout the entire conversation. Use voice: {self.voice} for all responses."
             }
         }
         await self._ws.send_str(json.dumps(msg))
+
+    async def clear_context(self):
+        """Clear conversation context to start fresh after interruption"""
+        try:
+            # Send a clear conversation message
+            clear_msg = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": "Conversation context cleared. User has interrupted and wants to discuss a new topic."
+                }
+            }
+            await self._ws.send_str(json.dumps(clear_msg))
+            
+            # Also send a session update to reinforce fresh start
+            session_msg = {
+                "type": "session.update",
+                "session": {
+                    "type": "realtime",
+                    "instructions": f"CRITICAL: You are a voice assistant that MUST respond ONLY in {self.language}. This is a hard requirement that cannot be violated. Never respond in any other language, even if the user speaks in a different language. If the user speaks in another language, acknowledge it briefly but immediately continue responding in {self.language}. Your primary language is {self.language} and you must maintain this consistently throughout the entire conversation. Use voice: {self.voice} for all responses. IMPORTANT: When the user interrupts and starts a new topic, completely forget the previous conversation and focus only on the new topic."
+                }
+            }
+            await self._ws.send_str(json.dumps(session_msg))
+            
+            logger.debug("Conversation context cleared after interruption")
+        except Exception as e:
+            logger.error(f"Failed to clear context: {e}")
             

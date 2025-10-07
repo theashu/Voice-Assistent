@@ -47,7 +47,10 @@ export default function App() {
   }, [isThinking]);
   useEffect(() => {
     audioCtxRef.current = new (window.AudioContext ||
-      window.webkitAudioContext)();
+      window.webkitAudioContext)({
+        sampleRate: 48000,
+        latencyHint: 'interactive', 
+      });
     return () => {
       try {
         audioCtxRef.current && audioCtxRef.current.close();
@@ -194,7 +197,10 @@ export default function App() {
       micStreamRef.current = stream;
       const audioCtx =
         audioCtxRef.current ||
-        new (window.AudioContext || window.webkitAudioContext)();
+        new (window.AudioContext || window.webkitAudioContext)({
+          sampleRate: 48000,
+          latencyHint: 'interactive',
+        });
       audioCtxRef.current = audioCtx;
       const src = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
@@ -223,10 +229,12 @@ export default function App() {
       analyserRef.current = null;
     }
   }
-  const VAD_RMS_THRESHOLD = 0.02; 
-  const VAD_SUSTAIN_MS = 180;
+  const VAD_RMS_THRESHOLD = 0.03;
+  const VAD_SUSTAIN_MS = 250;
 
   let vadLastAboveAt = 0;
+  let lastInterruptionTime = 0;
+  const INTERRUPTION_DEBOUNCE_MS = 500; // Prevent rapid interruptions
 
   function computeRMS(arr) {
     let sum = 0;
@@ -249,12 +257,15 @@ export default function App() {
       if (!vadLastAboveAt) {
         vadLastAboveAt = now;
       }
-      if (now - vadLastAboveAt > VAD_SUSTAIN_MS) {
+      // Only interrupt if enough time has passed since last interruption
+      if (now - vadLastAboveAt > VAD_SUSTAIN_MS && 
+          now - lastInterruptionTime > INTERRUPTION_DEBOUNCE_MS) {
         if (isPlayingAudioRef.current) {
           console.log("VAD barge-in: stopping playback and interrupting");
           stopPlayback();
           sendJson({ type: "interruption" });
           vadLastAboveAt = 0;
+          lastInterruptionTime = now;
         }
       }
     } else {
@@ -277,9 +288,16 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          sampleRate: INPUT_SAMPLE_RATE,
+          sampleRate: 48000, // Use standard 48kHz for better compatibility
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
+          googEchoCancellation: true,
+          googAutoGainControl: true,
+          googNoiseSuppression: true,
+          googHighpassFilter: true,
+          googTypingNoiseDetection: true,
+          googDAEchoCancellation: true,
         },
       });
 
@@ -301,6 +319,8 @@ export default function App() {
       // Handle messages from the worklet
       workletNode.port.onmessage = (event) => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          // Add debugging for audio input
+          console.log("Sending audio chunk:", event.data.byteLength, "bytes");
           wsRef.current.send(event.data);
         }
       };
@@ -369,16 +389,25 @@ export default function App() {
       const src = audioCtx.createBufferSource();
       currentSourceRef.current = src;
       src.buffer = audioBuffer;
-      src.connect(audioCtx.destination);
+      
+      // Add gain node for better audio control
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.value = 0.8; // Slightly reduce volume to prevent clipping
+      
+      src.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
       src.onended = () => {
         // Clear reference when a chunk finishes, then continue with queue
         if (currentSourceRef.current === src) currentSourceRef.current = null;
-        processAudioQueue();
+        // Add small delay to prevent audio gaps
+        setTimeout(() => processAudioQueue(), 10);
       };
       src.start();
     } catch (e) {
       console.error("Failed to play PCM16 audio chunk:", e);
-      processAudioQueue();
+      // Continue processing queue even if one chunk fails
+      setTimeout(() => processAudioQueue(), 10);
     }
   }
 
