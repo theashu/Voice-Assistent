@@ -2,7 +2,7 @@
 import os
 from dotenv import load_dotenv
 
-# load .env file automatically
+
 load_dotenv()
 
 class Settings:
@@ -12,5 +12,4 @@ class Settings:
     HOST = os.environ.get("HOST", "0.0.0.0")
     PORT = int(os.environ.get("PORT", 8080))
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "info")
-
 settings = Settings()

@@ -11,9 +11,10 @@ logger = logging.getLogger("openai_relay")
 OPENAI_WS_URL = settings.OPENAI_API_HOST.replace("https://","wss://") + f"/v1/realtime?model={settings.OPENAI_MODEL}"
 
 class OpenAIProviderSession:
-    def __init__(self, session_id: str, on_event):
+    def __init__(self, session_id: str, on_event, language: str = "English"):
         self.session_id = session_id
         self.on_event = on_event
+        self.language = language or "English"
         self._session = None
         self._ws = None
         self._reader_task = None
@@ -27,8 +28,9 @@ class OpenAIProviderSession:
         init_msg = {
             "type": "session.update",
             "session": {
-                "audio": {"voice": "alloy", "format": "wav", "sample_rate": 16000},
-                "conversation": {"memory": "ephemeral"}
+                "type": "realtime",
+                "output_modalities": ["audio"],
+                "instructions": f"You are a helpful voice assistant. Always respond and speak in {self.language}."
             }
         }
         await self._ws.send_str(json.dumps(init_msg))
@@ -51,8 +53,12 @@ class OpenAIProviderSession:
     async def commit(self):
         await self._ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
 
-    async def response_create(self, text: str):
-        msg = {"type":"response.create","response":{"instructions":text,}}
+    async def response_create(self, text: str | None = None):
+        # If text is provided, send as instructions; otherwise trigger generation from latest input buffer
+        response_obj = {}
+        if text:
+            response_obj["instructions"] = text
+        msg = {"type": "response.create", "response": response_obj}
         await self._ws.send_str(json.dumps(msg))
 
     async def cancel(self):
@@ -63,3 +69,15 @@ class OpenAIProviderSession:
             await self._ws.close()
         if self._session:
             await self._session.close()
+
+
+    async def update_language(self, language: str):
+        self.language = language or self.language or "English"
+        msg = {
+            "type": "session.update",
+            "session": {
+                "instructions": f"You are a helpful voice assistant. Always respond and speak in {self.language}."
+            }
+        }
+        await self._ws.send_str(json.dumps(msg))
+            
