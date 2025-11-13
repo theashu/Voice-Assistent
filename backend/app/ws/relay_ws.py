@@ -21,7 +21,10 @@ async def relay_ws(websocket: WebSocket):
     is_generating = False
     cancel_sent_for_current = False
     async def handle_provider_event(payload, is_binary: bool):
+        nonlocal is_generating, cancel_sent_for_current, last_audio_at
         if is_binary:
+            if cancel_sent_for_current:
+                return
             await websocket.send_bytes(payload)
         else:
             try:
@@ -34,10 +37,15 @@ async def relay_ws(websocket: WebSocket):
                 # Track generation state to coordinate barge-in
                 if isinstance(payload, dict):
                     t = payload.get("type")
+                    if cancel_sent_for_current and t and t.startswith("response.output_"):
+                        return
                     if t == "response.created":
                         is_generating = True
                         cancel_sent_for_current = False
                     elif t in ("response.done", "response.completed"):
+                        is_generating = False
+                        cancel_sent_for_current = False
+                    elif t in ("response.canceled", "response.cancelled"):
                         is_generating = False
                         cancel_sent_for_current = False
                     elif t == "input_audio_buffer.speech_stopped":
@@ -63,10 +71,10 @@ async def relay_ws(websocket: WebSocket):
             await websocket.send_text(json.dumps(payload))
     async def idle_commit_loop():
         nonlocal last_audio_at, provider, is_generating
-        IDLE_MS = 400 
+        IDLE_MS = 150 
         last_language_reinforcement = 0.0
         LANGUAGE_REINFORCEMENT_INTERVAL = 30000 
-        min_buffer_time = 200
+        min_buffer_time = 120
         
         while True:
             await asyncio.sleep(0.1)
@@ -159,8 +167,11 @@ async def relay_ws(websocket: WebSocket):
 
                 elif t == "greeting":
                     # Optionally send an initial spoken greeting from the assistant
-                    greet_lang = obj.get("language") or "English"
-                    text = f"Hello! Let's chat in {greet_lang}. How can I help you today?"
+                    greet_lang = (obj.get("language") or "English").strip()
+                    if greet_lang.lower().startswith("hin"):
+                        text = "मैं एक दिव्य हिन्दू हूँ। मेरे पास चारों वेदों, गोत्रों और धर्म से संबंधित सम्पूर्ण ज्ञान है। आप जो भी जानना चाहते हैं — चाहे वह आपके गोत्र से जुड़ा हो, जीवन से, या आत्मा से — उसका उत्तर मेरे पास है। बताइए, आप क्या जानना चाहेंगे?"
+                    else:
+                        text = "I am a divine Hindu. I possess complete knowledge related to the four Vedas, gotras, and the principles of Dharma. Whatever you wish to know — whether it is about your gotra, your life, or your soul — I have the answers. Tell me, what would you like to know?"
                     if provider:
                         await provider.response_create(text)
 

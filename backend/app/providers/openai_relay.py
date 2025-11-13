@@ -20,6 +20,15 @@ class OpenAIProviderSession:
         self._ws = None
         self._reader_task = None
 
+    def _build_instructions(self) -> str:
+        return (
+            f"You are a concise Dharmic guide. Reply only in {self.language}. "
+            "Answer only questions related to Dharmic, Hindu, spiritual, or related cultural topics. "
+            "If the user's request is outside those topics, respond with a brief apology saying you can only discuss Dharmic subjects. "
+            "Keep approved answers short and direct. "
+            f"Speak using voice preset {self.voice}."
+        )
+
     async def connect(self):
         headers = {"Authorization": f"Bearer {settings.OPENAI_API_KEY}"}
         self._session = aiohttp.ClientSession()
@@ -31,7 +40,7 @@ class OpenAIProviderSession:
             "session": {
                 "type": "realtime",
                 "output_modalities": ["audio"],
-                "instructions": f"CRITICAL: You are a voice assistant that MUST respond ONLY in {self.language}. This is a hard requirement that cannot be violated. Never respond in any other language, even if the user speaks in a different language. If the user speaks in another language, acknowledge it briefly but immediately continue responding in {self.language}. Your primary language is {self.language} and you must maintain this consistently throughout the entire conversation. Use voice: {self.voice} for all responses."
+                "instructions": self._build_instructions(),
             }
         }
         await self._ws.send_str(json.dumps(init_msg))
@@ -58,9 +67,17 @@ class OpenAIProviderSession:
         # If text is provided, send as instructions; otherwise trigger generation from latest input buffer
         response_obj = {}
         if text:
-            response_obj["instructions"] = f"{text} Remember: You MUST respond ONLY in {self.language}. Never use any other language. Focus only on what the user is asking about now, not previous topics."
+            response_obj["instructions"] = (
+                f"Respond by speaking exactly the following message, without paraphrasing, translating, or adding any extra words: \"{text}\". "
+                "After you finish, stop speaking. Do not add anything else."
+            )
         else:
-            response_obj["instructions"] = f"Respond to the user's current input in {self.language} only. This is a critical requirement - never respond in any other language. Focus on the current topic the user is asking about, not previous conversation topics."
+            response_obj["instructions"] = (
+                f"Answer the user's latest input in {self.language} only. "
+                "If the request is not about Dharmic or Hindu topics, reply with: "
+                "\"Sorry, I can only answer Dharmic questions.\" "
+                "Otherwise, keep the answer short, direct, and limited to the approved topic."
+            )
         msg = {"type": "response.create", "response": response_obj}
         await self._ws.send_str(json.dumps(msg))
 
@@ -80,7 +97,7 @@ class OpenAIProviderSession:
             "type": "session.update",
             "session": {
                 "type": "realtime",
-                "instructions": f"CRITICAL: You are a voice assistant that MUST respond ONLY in {self.language}. This is a hard requirement that cannot be violated. Never respond in any other language, even if the user speaks in a different language. If the user speaks in another language, acknowledge it briefly but immediately continue responding in {self.language}. Your primary language is {self.language} and you must maintain this consistently throughout the entire conversation. Use voice: {self.voice} for all responses."
+                "instructions": self._build_instructions(),
             }
         }
         await self._ws.send_str(json.dumps(msg))
@@ -91,7 +108,7 @@ class OpenAIProviderSession:
             "type": "session.update",
             "session": {
                 "type": "realtime",
-                "instructions": f"CRITICAL: You are a voice assistant that MUST respond ONLY in {self.language}. This is a hard requirement that cannot be violated. Never respond in any other language, even if the user speaks in a different language. If the user speaks in another language, acknowledge it briefly but immediately continue responding in {self.language}. Your primary language is {self.language} and you must maintain this consistently throughout the entire conversation. Use voice: {self.voice} for all responses."
+                "instructions": self._build_instructions(),
             }
         }
         await self._ws.send_str(json.dumps(msg))
@@ -115,7 +132,7 @@ class OpenAIProviderSession:
                 "type": "session.update",
                 "session": {
                     "type": "realtime",
-                    "instructions": f"CRITICAL: You are a voice assistant that MUST respond ONLY in {self.language}. This is a hard requirement that cannot be violated. Never respond in any other language, even if the user speaks in a different language. If the user speaks in another language, acknowledge it briefly but immediately continue responding in {self.language}. Your primary language is {self.language} and you must maintain this consistently throughout the entire conversation. Use voice: {self.voice} for all responses. IMPORTANT: When the user interrupts and starts a new topic, completely forget the previous conversation and focus only on the new topic."
+                    "instructions": self._build_instructions() + " IMPORTANT: When the user interrupts and starts a new topic, completely forget the previous conversation and focus only on the new topic."
                 }
             }
             await self._ws.send_str(json.dumps(session_msg))

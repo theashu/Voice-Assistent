@@ -4,8 +4,13 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.inputSampleRate = 48000; // Most modern browsers use 48kHz
     this.outputSampleRate = 24000; // OpenAI expects 24kHz
     this.resampleRatio = this.inputSampleRate / this.outputSampleRate;
-    this.bufferSize = 1024; // Process in chunks
+    this.bufferSize = 256; // Smaller chunks for lower latency
     this.inputBuffer = [];
+    this.port.onmessage = (event) => {
+      if (event && event.data === "flush") {
+        this.flushBuffer(true);
+      }
+    };
   }
 
   process(inputs, outputs, parameters) {
@@ -20,19 +25,30 @@ class AudioProcessor extends AudioWorkletProcessor {
       
       // Process when we have enough samples
       if (this.inputBuffer.length >= this.bufferSize) {
-        const bufferArray = new Float32Array(this.inputBuffer.slice(0, this.bufferSize));
-        this.inputBuffer = this.inputBuffer.slice(this.bufferSize);
-        
-        const resampled = this.resample(bufferArray, this.resampleRatio);
-        const pcm16 = this.float32To16BitPCM(resampled);
-        
-        // Only send if we have meaningful audio (not silence)
-        if (this.hasAudioContent(resampled)) {
-          this.port.postMessage(pcm16.buffer);
-        }
+        this.flushBuffer();
       }
     }
     return true;
+  }
+
+  flushBuffer(force = false) {
+    if (this.inputBuffer.length === 0) return;
+
+    const sliceLength = force ? this.inputBuffer.length : this.bufferSize;
+    const chunk = new Float32Array(this.inputBuffer.slice(0, sliceLength));
+    this.inputBuffer = this.inputBuffer.slice(sliceLength);
+
+    const resampled = this.resample(chunk, this.resampleRatio);
+    const pcm16 = this.float32To16BitPCM(resampled);
+
+    if (force || this.hasAudioContent(resampled)) {
+      this.port.postMessage(pcm16.buffer);
+    }
+
+    // If more data remains after a forced flush, continue flushing until empty
+    if (force && this.inputBuffer.length > 0) {
+      this.flushBuffer(true);
+    }
   }
 
   resample(buffer, ratio) {
@@ -42,7 +58,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     for (let i = 0; i < outLength; i++) {
       const inIndex = i * ratio;
       const floor = Math.floor(inIndex);
-      const ceil = Math.ceil(inIndex);
+      const ceil = Math.min(inLength - 1, Math.ceil(inIndex));
       const frac = inIndex - floor;
       result[i] = buffer[floor] * (1 - frac) + buffer[ceil] * frac;
     }
@@ -65,7 +81,7 @@ class AudioProcessor extends AudioWorkletProcessor {
       sum += Math.abs(buffer[i]);
     }
     const average = sum / buffer.length;
-    return average > 0.001; // Threshold for meaningful audio
+    return average > 0.0005; // Lower threshold to reduce missed speech
   }
 }
 

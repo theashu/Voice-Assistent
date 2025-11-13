@@ -30,6 +30,7 @@ export default function App() {
   const micStreamRef = useRef(null);
   const analyserRef = useRef(null);
   const vadActiveRef = useRef(false);
+  const isRecordingRef = useRef(false);
   const vadAnimationRef = useRef(null);
   const greetingSentRef = useRef(false);
   useEffect(() => {
@@ -247,6 +248,11 @@ export default function App() {
 
   function runVadLoop() {
     if (!vadActiveRef.current || !analyserRef.current) return;
+    if (!isRecordingRef.current) {
+      vadLastAboveAt = 0;
+      vadAnimationRef.current = requestAnimationFrame(runVadLoop);
+      return;
+    }
     const analyser = analyserRef.current;
     const data = new Uint8Array(analyser.fftSize);
     analyser.getByteTimeDomainData(data);
@@ -330,6 +336,7 @@ export default function App() {
 
       micStreamRef.current = stream;
       setIsRecording(true);
+      isRecordingRef.current = true;
     } catch (err) {
       console.error("startRecording err", err);
       alert("Could not start recording: " + (err.message || err));
@@ -338,11 +345,17 @@ export default function App() {
 
   function stopRecording() {
     setIsRecording(false);
+    isRecordingRef.current = false;
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach((t) => t.stop());
       micStreamRef.current = null;
     }
     if (workletNodeRef.current) {
+      try {
+        workletNodeRef.current.port.postMessage("flush");
+      } catch (e) {
+        console.warn("Failed to flush worklet buffer on stop", e);
+      }
       workletNodeRef.current.disconnect();
       workletNodeRef.current = null;
     }
